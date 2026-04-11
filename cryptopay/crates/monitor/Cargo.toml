@@ -1,0 +1,15 @@
+[package]
+name = "cryptopay-monitor"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+cryptopay-core = { path = "../core" }
+cryptopay-db = { path = "../db" }

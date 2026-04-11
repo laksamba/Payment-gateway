@@ -1,0 +1,16 @@
+[package]
+name = "cryptopay-webhook"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+tokio = { workspace = true }
+
+cryptopay-core = { path = "../core" }
+cryptopay-db = { path = "../db" }
