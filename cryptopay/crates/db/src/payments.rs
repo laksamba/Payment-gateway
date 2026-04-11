@@ -157,3 +157,40 @@ pub async fn expire_old_payments(pool: &PgPool) -> anyhow::Result<u64> {
 
     Ok(result.rows_affected())
 }
+
+pub async fn find_pending_payments(pool: &PgPool) -> anyhow::Result<Vec<Payment>> {
+    let payments = sqlx::query_as::<_, Payment>(
+        r#"
+        SELECT id, merchant_id, amount, currency, deposit_address, status,
+               tx_hash, confirmations, required_confirmations,
+               idempotency_key, metadata, expires_at, confirmed_at, created_at
+        FROM payments
+        WHERE status = 'pending' AND expires_at > NOW()
+        ORDER BY created_at ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(payments)
+}
+
+pub async fn mark_payment_detected(
+    pool: &PgPool,
+    id: Uuid,
+    tx_hash: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE payments
+        SET status = 'detected', tx_hash = $1
+        WHERE id = $2 AND status = 'pending'
+        "#,
+    )
+    .bind(tx_hash)
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}

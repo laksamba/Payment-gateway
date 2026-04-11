@@ -61,6 +61,9 @@ async fn main() -> Result<()> {
         config,
     });
 
+    // Initialize Tron client for blockchain monitoring
+    let tron_client = cryptopay_monitor::tron::TronClient::new(state.config.trongrid_api_key.clone());
+
     let app = Router::new()
         .route("/health", get(health_check))
         .layer(CorsLayer::permissive())
@@ -84,6 +87,15 @@ async fn main() -> Result<()> {
                     tracing::error!("Failed to expire old payments: {}", e);
                 }
             }
+        }
+    });
+
+    // Start blockchain scanner
+    let scanner_db = state.db.clone();
+    let scanner_tron = tron_client.clone();
+    tokio::spawn(async move {
+        if let Err(e) = cryptopay_monitor::scanner::run_scanner(scanner_db, scanner_tron).await {
+            tracing::error!("Scanner failed: {}", e);
         }
     });
 

@@ -25,3 +25,4 @@ rust_decimal = { workspace = true }
 
 cryptopay-core = { path = "../core" }
 cryptopay-db = { path = "../db" }
+cryptopay-monitor = { path = "../monitor" }

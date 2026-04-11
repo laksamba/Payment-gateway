@@ -390,6 +390,7 @@ dependencies = [
  "axum",
  "cryptopay-core",
  "cryptopay-db",
+ "cryptopay-monitor",
  "dotenvy",
  "hex",
  "rust_decimal",
@@ -440,12 +441,16 @@ dependencies = [
 name = "cryptopay-monitor"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "cryptopay-core",
  "cryptopay-db",
  "reqwest",
+ "rust_decimal",
  "serde",
  "serde_json",
+ "sqlx",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
