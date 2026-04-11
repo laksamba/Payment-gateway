@@ -2,6 +2,9 @@ pub mod payment;
 pub mod money;
 pub mod errors;
 
+pub use payment::{Payment, PaymentStatus};
+pub use errors::AppError;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;

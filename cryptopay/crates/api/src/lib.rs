@@ -2,6 +2,7 @@ pub mod routes;
 pub mod middleware;
 
 pub use cryptopay_core::errors::AppError;
+// pub use middleware::auth::AuthenticatedMerchant;
 
 use std::sync::Arc;
 

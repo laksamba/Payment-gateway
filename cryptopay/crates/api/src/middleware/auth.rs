@@ -4,23 +4,19 @@ use axum::{
 };
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use async_trait::async_trait;
 
 use crate::{AppError, AppState};
 
+// Temporarily disabled authentication
+/*
 #[derive(Clone)]
 pub struct AuthenticatedMerchant(pub cryptopay_core::Merchant);
 
-#[async_trait::async_trait]
-impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedMerchant
-where
-    Arc<AppState>: FromRef<S>,
-{
+impl FromRequestParts<Arc<AppState>> for AuthenticatedMerchant {
     type Rejection = AppError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let State(app_state): State<Arc<AppState>> = State::from_request_parts(parts, state)
-            .await
-            .map_err(|_| AppError::Internal(anyhow::anyhow!("state not found")))?;
+    async fn from_request_parts(parts: &mut Parts, state: &Arc<AppState>) -> Result<Self, Self::Rejection> {
 
         let api_key = parts
             .headers
@@ -31,7 +27,7 @@ where
 
         let hash = hex::encode(Sha256::digest(api_key.as_bytes()));
 
-        let merchant = cryptopay_db::merchants::find_merchant_by_api_key_hash(&app_state.db, &hash)
+        let merchant = cryptopay_db::merchants::find_merchant_by_api_key_hash(&state.db, &hash)
             .await
             .map_err(AppError::Internal)?
             .ok_or(AppError::Unauthorized)?;
@@ -39,3 +35,4 @@ where
         Ok(AuthenticatedMerchant(merchant))
     }
 }
+*/

@@ -7,6 +7,7 @@ use axum::{
 };
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
+use sha2::{Digest, Sha256};
 
 use cryptopay_api::{AppState, Config, AppError};
 
@@ -23,6 +24,38 @@ async fn main() -> Result<()> {
 
     let db = cryptopay_db::connect(&config.database_url).await?;
 
+    // Create or find test merchant for development
+    let test_api_key = "test_api_key_123";
+    let test_webhook_secret = "test_webhook_secret_456";
+    let test_api_key_hash = hex::encode(sha2::Sha256::digest(test_api_key.as_bytes()));
+    
+    // Try to find existing test merchant
+    let merchant = match cryptopay_db::merchants::find_merchant_by_email(&db, "test@example.com").await {
+        Ok(Some(merchant)) => {
+            tracing::info!("Found existing test merchant with ID: {}", merchant.id);
+            merchant
+        },
+        _ => {
+            // Create new test merchant
+            match cryptopay_db::merchants::create_merchant(
+                &db,
+                "Test Merchant",
+                "test@example.com",
+                &test_api_key_hash,
+                test_webhook_secret,
+            ).await {
+                Ok(merchant) => {
+                    tracing::info!("Created test merchant with ID: {}", merchant.id);
+                    merchant
+                },
+                Err(e) => {
+                    tracing::error!("Failed to create test merchant: {}", e);
+                    return Err(e.into());
+                }
+            }
+        }
+    };
+
     let state = Arc::new(AppState {
         db,
         config,
@@ -35,6 +68,24 @@ async fn main() -> Result<()> {
         .merge(routes::merchants::routes())
         .merge(routes::payments::routes())
         .with_state(state.clone());
+
+    // Start background task to expire old payments
+    let db_clone = state.db.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+            match cryptopay_db::payments::expire_old_payments(&db_clone).await {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!("Expired {} old payments", count);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to expire old payments: {}", e);
+                }
+            }
+        }
+    });
 
     let port = state.config.server_port;
     let addr = format!("0.0.0.0:{}", port);
