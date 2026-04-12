@@ -1,12 +1,27 @@
+use bs58;
 use chrono::{Duration, Utc};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use cryptopay_core::{Payment, PaymentStatus};
 
 fn generate_deposit_address() -> String {
-    let uuid_part = Uuid::new_v4().to_string().replace("-", "");
-    format!("T{}", &uuid_part[..32].to_uppercase())
+    let mut address_bytes = [0u8; 21];
+    address_bytes[0] = 0x41; // Tron address version byte
+
+    let u1 = Uuid::new_v4();
+    let u2 = Uuid::new_v4();
+    let uuid1 = u1.as_bytes();
+    let uuid2 = u2.as_bytes();
+    address_bytes[1..17].copy_from_slice(uuid1);
+    address_bytes[17..21].copy_from_slice(&uuid2[..4]);
+
+    let checksum = Sha256::digest(&Sha256::digest(&address_bytes));
+    let mut full = address_bytes.to_vec();
+    full.extend_from_slice(&checksum[..4]);
+
+    bs58::encode(full).into_string()
 }
 
 pub async fn create_payment(
@@ -173,6 +188,65 @@ pub async fn find_pending_payments(pool: &PgPool) -> anyhow::Result<Vec<Payment>
     .await?;
 
     Ok(payments)
+}
+
+pub async fn find_detected_payments(pool: &PgPool) -> anyhow::Result<Vec<Payment>> {
+    let payments = sqlx::query_as::<_, Payment>(
+        r#"
+        SELECT id, merchant_id, amount, currency, deposit_address, status,
+               tx_hash, confirmations, required_confirmations,
+               idempotency_key, metadata, expires_at, confirmed_at, created_at
+        FROM payments
+        WHERE status IN ('detected', 'confirming') AND tx_hash IS NOT NULL
+        ORDER BY created_at ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(payments)
+}
+
+pub async fn update_payment_confirmations(
+    pool: &PgPool,
+    id: Uuid,
+    confirmations: i32,
+    status: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE payments
+        SET confirmations = $1, status = $2
+        WHERE id = $3
+        "#,
+    )
+    .bind(confirmations)
+    .bind(status)
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn mark_payment_confirmed(
+    pool: &PgPool,
+    id: Uuid,
+    confirmations: i32,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE payments
+        SET status = 'confirmed', confirmations = $1, confirmed_at = NOW()
+        WHERE id = $2
+        "#,
+    )
+    .bind(confirmations)
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
 
 pub async fn mark_payment_detected(
