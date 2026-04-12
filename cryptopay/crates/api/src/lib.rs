@@ -35,6 +35,7 @@ impl Config {
     }
 }
 
+#[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::PgPool,
     pub config: Config,

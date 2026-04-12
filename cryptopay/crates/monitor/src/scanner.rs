@@ -2,6 +2,7 @@ use std::time::Duration;
 use sqlx::PgPool;
 use rust_decimal::Decimal;
 use serde_json::json;
+use chrono::Utc;
 
 use crate::tron::TronClient;
 use crate::get_usdt_contract;
@@ -150,6 +151,33 @@ pub async fn run_scanner(
                     }
 
                     tracing::info!("Payment confirmed: {}", payment.id);
+
+                    // Queue webhook if merchant has webhook_url configured
+                    if let Some(merchant) = cryptopay_db::merchants::find_merchant_by_id(&pool, payment.merchant_id).await? {
+                        if let Some(webhook_url) = &merchant.webhook_url {
+                            let webhook_payload = cryptopay_webhook::delivery::WebhookPayload {
+                                event: "payment.confirmed".to_string(),
+                                payment_id: payment.id,
+                                tx_hash: payment.tx_hash.clone(),
+                                amount: payment.amount.to_string(),
+                                currency: payment.currency.clone(),
+                                confirmed_at: Some(Utc::now()),
+                                metadata: payment.metadata.clone(),
+                            };
+
+                            if let Err(e) = cryptopay_webhook::delivery::WebhookDelivery::queue_webhook(
+                                &pool,
+                                payment.id,
+                                "payment.confirmed",
+                                webhook_url,
+                                &webhook_payload,
+                            ).await {
+                                tracing::error!("Failed to queue webhook for payment {}: {}", payment.id, e);
+                            } else {
+                                tracing::info!("Webhook queued for payment {}", payment.id);
+                            }
+                        }
+                    }
                 } else {
                     if let Err(e) = cryptopay_db::payments::update_payment_confirmations(
                         &pool,

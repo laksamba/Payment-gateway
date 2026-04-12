@@ -61,3 +61,21 @@ pub async fn find_merchant_by_email(
 
     Ok(merchant)
 }
+
+pub async fn find_merchant_by_id(
+    pool: &PgPool,
+    id: uuid::Uuid,
+) -> anyhow::Result<Option<Merchant>> {
+    let merchant = sqlx::query_as::<_, Merchant>(
+        r#"
+        SELECT id, name, email, api_key_hash, webhook_url, webhook_secret, fee_percent, is_active, created_at
+        FROM merchants
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(merchant)
+}

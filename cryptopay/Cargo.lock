@@ -313,6 +313,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
+name = "constant_time_eq"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -394,9 +400,11 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "chrono",
  "cryptopay-core",
  "cryptopay-db",
  "cryptopay-monitor",
+ "cryptopay-webhook",
  "dotenvy",
  "hex",
  "rust_decimal",
@@ -449,8 +457,10 @@ name = "cryptopay-monitor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "cryptopay-core",
  "cryptopay-db",
+ "cryptopay-webhook",
  "reqwest",
  "rust_decimal",
  "serde",
@@ -464,13 +474,20 @@ dependencies = [
 name = "cryptopay-webhook"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "constant_time_eq",
  "cryptopay-core",
  "cryptopay-db",
  "hex",
  "hmac",
  "reqwest",
+ "rust_decimal",
+ "serde",
+ "serde_json",
  "sha2",
+ "sqlx",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

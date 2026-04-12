@@ -70,6 +70,7 @@ async fn main() -> Result<()> {
         .layer(TraceLayer::new_for_http())
         .merge(routes::merchants::routes())
         .merge(routes::payments::routes())
+        .merge(routes::webhooks::routes())
         .with_state(state.clone());
 
     // Start background task to expire old payments
@@ -96,6 +97,23 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         if let Err(e) = cryptopay_monitor::scanner::run_scanner(scanner_db, scanner_tron).await {
             tracing::error!("Scanner failed: {}", e);
+        }
+    });
+
+    // Start webhook retry processor
+    let webhook_db = state.db.clone();
+    let webhook_delivery = cryptopay_webhook::delivery::WebhookDelivery::new();
+    let webhook_secret = test_webhook_secret.to_string();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            if let Err(e) = cryptopay_webhook::delivery::WebhookDelivery::process_pending_webhooks(
+                &webhook_db,
+                &webhook_delivery,
+                &webhook_secret,
+            ).await {
+                tracing::error!("Webhook processor error: {}", e);
+            }
         }
     });
 

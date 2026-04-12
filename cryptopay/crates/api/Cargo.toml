@@ -22,7 +22,9 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 async-trait = { workspace = true }
 rust_decimal = { workspace = true }
+chrono = { workspace = true }
 
 cryptopay-core = { path = "../core" }
 cryptopay-db = { path = "../db" }
 cryptopay-monitor = { path = "../monitor" }
+cryptopay-webhook = { path = "../webhook" }

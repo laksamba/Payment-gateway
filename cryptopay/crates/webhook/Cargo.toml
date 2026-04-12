@@ -10,7 +10,14 @@ reqwest = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+constant_time_eq = { workspace = true }
 tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+sqlx = { workspace = true }
+rust_decimal = { workspace = true }
 
 cryptopay-core = { path = "../core" }
 cryptopay-db = { path = "../db" }
