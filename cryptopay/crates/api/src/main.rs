@@ -63,6 +63,14 @@ async fn main() -> Result<()> {
 
     // Initialize Tron client for blockchain monitoring
     let tron_client = cryptopay_monitor::tron::TronClient::new(state.config.trongrid_api_key.clone());
+    
+    // Log that scanner is being initialized
+    let api_key_display = if state.config.trongrid_api_key.len() > 8 {
+        format!("{}...{}", &state.config.trongrid_api_key[..8], &state.config.trongrid_api_key[state.config.trongrid_api_key.len()-4..])
+    } else {
+        "***".to_string()
+    };
+    tracing::info!("Initializing scanner with TronGrid API key: {}", api_key_display);
 
     let app = Router::new()
         .route("/health", get(health_check))

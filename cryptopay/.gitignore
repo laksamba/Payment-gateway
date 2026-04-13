@@ -22,3 +22,5 @@ Thumbs.db
 # Database
 *.db
 *.db-journal
+
+postman_collection.json

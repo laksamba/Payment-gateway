@@ -254,7 +254,33 @@ pub async fn mark_payment_detected(
     id: Uuid,
     tx_hash: &str,
 ) -> anyhow::Result<()> {
-    sqlx::query(
+    // First, check current payment state before updating
+    let current_payment = sqlx::query_as::<_, Payment>(
+        "SELECT id, merchant_id, amount, currency, deposit_address, status,
+                tx_hash, confirmations, required_confirmations,
+                idempotency_key, metadata, expires_at, confirmed_at, created_at
+         FROM payments WHERE id = $1"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    let payment = match current_payment {
+        Some(p) => p,
+        None => {
+            return Err(anyhow::anyhow!("Payment {} not found", id));
+        }
+    };
+
+    // Check if payment is still pending
+    if payment.status != "pending" {
+        return Err(anyhow::anyhow!(
+            "Cannot mark payment {} as detected: current status is '{}' (not 'pending'). Existing tx_hash: {:?}",
+            id, payment.status, payment.tx_hash
+        ));
+    }
+
+    let result = sqlx::query(
         r#"
         UPDATE payments
         SET status = 'detected', tx_hash = $1
@@ -265,6 +291,13 @@ pub async fn mark_payment_detected(
     .bind(id)
     .execute(pool)
     .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(anyhow::anyhow!(
+            "Failed to update payment {}: no rows affected (payment may have been updated by another process)",
+            id
+        ));
+    }
 
     Ok(())
 }
