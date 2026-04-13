@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use axum::{
+    extract::{Path, Query, State},
     routing::{get, post},
-    Router, Json, extract::{State, Path, Query},
+    Json, Router,
 };
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
-use crate::{AppState, AppError};
-use cryptopay_core::money::parse_amount;
+use crate::{AppError, AppState, AuthenticatedMerchant};
+use cryptopay_core::{money::parse_amount, Payment, PaymentStatus};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -51,106 +51,136 @@ struct PaginationInfo {
 
 #[derive(serde::Serialize)]
 struct ListPaymentsResponse {
-    data: Vec<cryptopay_core::Payment>,
+    data: Vec<Payment>,
     pagination: PaginationInfo,
 }
 
 #[axum::debug_handler]
 async fn create_payment(
     State(state): State<Arc<AppState>>,
-    // merchant: AuthenticatedMerchant,
+    merchant: AuthenticatedMerchant,
     Json(req): Json<CreatePaymentRequest>,
 ) -> Result<Json<CreatePaymentResponse>, AppError> {
     let amount = parse_amount(&req.amount)?;
 
     if req.currency != "USDT" {
-        return Err(AppError::BadRequest("only USDT currency is supported".to_string()));
+        return Err(AppError::BadRequest(
+            "only USDT currency is supported".to_string(),
+        ));
     }
 
     let idempotency_key = req.idempotency_key.as_deref();
-
-    if let Some(key) = idempotency_key {
-        // For now, skip idempotency check
-        // if let Some(existing) = cryptopay_db::payments::find_payment_by_idempotency_key(
-        //     &state.db,
-        //     merchant.0.id,
-        //     key,
-        // )
-        // .await
-        // .map_err(AppError::Internal)?
-        // {
-        //     return Ok(Json(CreatePaymentResponse {
-        //         payment_id: existing.id,
-        //         deposit_address: existing.deposit_address,
-        //         amount: existing.amount.to_string(),
-        //         currency: existing.currency,
-        //         status: existing.status,
-        //         expires_at: existing.expires_at.to_rfc3339(),
-        //     }));
-        // }
-    }
-
     let metadata = req.metadata.unwrap_or(serde_json::json!({}));
 
-    // For testing, use the known test merchant ID
-    let merchant_id = uuid::Uuid::parse_str("66fd071c-bab9-47f6-8c73-1d2a66f5d940").unwrap();
+    if let Some(key) = idempotency_key {
+        let existing_payment = cryptopay_db::payments::find_payment_by_idempotency_key(
+            &state.db,
+            merchant.0.id,
+            key,
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                "Failed to load idempotent payment for merchant {} and key {}: {}",
+                merchant.0.id,
+                key,
+                error
+            );
+            AppError::Internal(error)
+        })?;
 
-    let new_payment = cryptopay_db::payments::create_payment(
+        if let Some(existing) = existing_payment {
+            if existing.amount != amount
+                || existing.currency != req.currency
+                || existing.metadata != metadata
+            {
+                return Err(AppError::Conflict(
+                    "idempotency_key already used with different payment parameters".to_string(),
+                ));
+            }
+
+            return Ok(Json(to_create_payment_response(&existing)));
+        }
+    }
+
+    let create_payment_result = cryptopay_db::payments::create_payment(
         &state.db,
-        merchant_id,
+        merchant.0.id,
         amount,
         &req.currency,
         idempotency_key,
-        metadata,
+        metadata.clone(),
+        &state.config.master_wallet_private_key,
     )
-    .await
-    .map_err(AppError::Internal)?;
+    .await;
 
-    Ok(Json(CreatePaymentResponse {
-        payment_id: new_payment.id,
-        deposit_address: new_payment.deposit_address,
-        amount: new_payment.amount.to_string(),
-        currency: new_payment.currency,
-        status: new_payment.status,
-        expires_at: new_payment.expires_at.to_rfc3339(),
-    }))
+    match create_payment_result {
+        Ok(new_payment) => Ok(Json(to_create_payment_response(&new_payment))),
+        Err(err) if is_idempotency_race(&err) && idempotency_key.is_some() => {
+            let existing = cryptopay_db::payments::find_payment_by_idempotency_key(
+                &state.db,
+                merchant.0.id,
+                idempotency_key.expect("checked is_some above"),
+            )
+            .await
+            .map_err(|error| {
+                tracing::error!(
+                    "Failed to reload idempotent payment after unique violation for merchant {}: {}",
+                    merchant.0.id,
+                    error
+                );
+                AppError::Internal(error)
+            })?
+            .ok_or_else(|| AppError::Internal(err))?;
+
+            if existing.amount != amount
+                || existing.currency != req.currency
+                || existing.metadata != metadata
+            {
+                return Err(AppError::Conflict(
+                    "idempotency_key already used with different payment parameters".to_string(),
+                ));
+            }
+
+            Ok(Json(to_create_payment_response(&existing)))
+        }
+        Err(err) => {
+            tracing::error!(
+                "Failed to create payment for merchant {}: {}",
+                merchant.0.id,
+                err
+            );
+            Err(AppError::Internal(err))
+        }
+    }
 }
 
 async fn list_payments(
     State(state): State<Arc<AppState>>,
-    // merchant: AuthenticatedMerchant,
+    merchant: AuthenticatedMerchant,
     Query(query): Query<ListPaymentsQuery>,
 ) -> Result<Json<ListPaymentsResponse>, AppError> {
-    let limit = query.limit.unwrap_or(20).min(100).max(1);
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
     let page = query.page.unwrap_or(1).max(1);
     let offset = (page - 1) * limit;
 
     let status_filter = query.status.as_deref();
+    if let Some(status) = status_filter {
+        status.parse::<PaymentStatus>().map_err(AppError::BadRequest)?;
+    }
 
-    // For testing, use the known test merchant ID
-    let merchant_id = uuid::Uuid::parse_str("66fd071c-bab9-47f6-8c73-1d2a66f5d940").unwrap();
+    let payments =
+        cryptopay_db::payments::list_payments(&state.db, merchant.0.id, status_filter, limit, offset)
+            .await
+            .map_err(AppError::Internal)?;
 
-    let payments = cryptopay_db::payments::list_payments(
-        &state.db,
-        merchant_id,
-        status_filter,
-        limit,
-        offset,
-    )
-    .await
-    .map_err(AppError::Internal)?;
+    let total = cryptopay_db::payments::count_payments(&state.db, merchant.0.id, status_filter)
+        .await
+        .map_err(AppError::Internal)?;
 
-    let total = cryptopay_db::payments::count_payments(
-        &state.db,
-        merchant_id,
-        status_filter,
-    )
-    .await
-    .map_err(AppError::Internal)?;
+    let pages = (total + limit - 1) / limit;
 
-    let pages = (total + limit - 1) / limit; // Ceiling division
-
-    let response = ListPaymentsResponse {
+    Ok(Json(ListPaymentsResponse {
         data: payments,
         pagination: PaginationInfo {
             total,
@@ -158,28 +188,37 @@ async fn list_payments(
             limit,
             pages,
         },
-    };
-
-    Ok(Json(response))
+    }))
 }
 
 async fn get_payment(
     State(state): State<Arc<AppState>>,
-    // merchant: AuthenticatedMerchant,
+    merchant: AuthenticatedMerchant,
     Path(payment_id): Path<uuid::Uuid>,
-) -> Result<Json<cryptopay_core::Payment>, AppError> {
-    let payment = cryptopay_db::payments::find_payment_by_id(&state.db, payment_id)
-        .await
-        .map_err(AppError::Internal)?
-        .ok_or(AppError::NotFound("Payment not found".to_string()))?;
-
-    // For testing, use the known test merchant ID
-    let merchant_id = uuid::Uuid::parse_str("66fd071c-bab9-47f6-8c73-1d2a66f5d940").unwrap();
-
-    // Verify the payment belongs to the test merchant
-    if payment.merchant_id != merchant_id {
-        return Err(AppError::NotFound("Payment not found".to_string()));
-    }
+) -> Result<Json<Payment>, AppError> {
+    let payment =
+        cryptopay_db::payments::find_payment_by_id_and_merchant(&state.db, payment_id, merchant.0.id)
+            .await
+            .map_err(AppError::Internal)?
+            .ok_or(AppError::NotFound("Payment not found".to_string()))?;
 
     Ok(Json(payment))
+}
+
+fn to_create_payment_response(payment: &Payment) -> CreatePaymentResponse {
+    CreatePaymentResponse {
+        payment_id: payment.id,
+        deposit_address: payment.deposit_address.clone(),
+        amount: payment.amount.to_string(),
+        currency: payment.currency.clone(),
+        status: payment.status.clone(),
+        expires_at: payment.expires_at.to_rfc3339(),
+    }
+}
+
+fn is_idempotency_race(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<sqlx::Error>(),
+        Some(sqlx::Error::Database(db_error)) if db_error.code().as_deref() == Some("23505")
+    )
 }

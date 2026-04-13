@@ -39,19 +39,6 @@ pub struct TransactionInfo {
 }
 
 #[derive(Debug, Deserialize)]
-struct TronGridResponse {
-    #[serde(default)]
-    pub data: Vec<Trc20Transfer>,
-    pub success: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TransactionInfoResponse {
-    #[serde(default)]
-    pub data: Vec<TransactionInfo>,
-}
-
-#[derive(Debug, Deserialize)]
 struct BlockRawData {
     number: u64,
 }
@@ -211,10 +198,7 @@ impl TronClient {
                                     .and_then(|r| r.get("result"))
                                     .and_then(|res| res.as_str())
                                     .map(|s| s.to_string())
-                            })
-                            // If transaction has blockNumber, assume success (it's been mined)
-                            // For TRC20 transfers, if they're in a block, they succeeded
-                            .or_else(|| Some("SUCCESS".to_string()));
+                            });
                         
                         tracing::info!("✓ Transaction block={}, contract_ret={:?}", block_number, contract_ret);
                         

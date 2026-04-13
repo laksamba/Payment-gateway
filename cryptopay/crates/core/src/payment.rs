@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use std::str::FromStr;
 use std::fmt;
 use uuid::Uuid;

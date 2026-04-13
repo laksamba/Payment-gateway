@@ -9,12 +9,15 @@ license.workspace = true
 sqlx = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
+hmac = { workspace = true }
 sha2 = { workspace = true }
+sha3 = { workspace = true }
 hex = { workspace = true }
 bs58 = { workspace = true }
 chrono = { workspace = true }
 rust_decimal = { workspace = true }
 uuid = { workspace = true }
 serde_json = { workspace = true }
+secp256k1 = { workspace = true }
 
 cryptopay-core = { path = "../core" }

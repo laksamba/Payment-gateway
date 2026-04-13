@@ -26,7 +26,9 @@ sqlx = { version = "0.7", features = ["postgres", "runtime-tokio", "uuid", "chro
 reqwest = { version = "0.12", features = ["json"] }
 hmac = "0.12"
 sha2 = "0.10"
+sha3 = "0.10"
 hex = "0.4"
 constant_time_eq = "0.3"
 bs58 = "0.4"
 async-trait = "0.1"
+secp256k1 = "0.29"

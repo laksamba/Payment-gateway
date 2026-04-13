@@ -2,13 +2,11 @@ use axum::{
     extract::{Query, State},
     Json,
 };
-use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
-use uuid::Uuid;
 use chrono::{DateTime, Utc};
-use anyhow;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-use crate::{AppState, AppError};
+use crate::{AppError, AppState, AuthenticatedMerchant};
 
 #[derive(Deserialize)]
 pub struct WebhookQuery {
@@ -45,18 +43,12 @@ pub struct PaginationInfo {
 }
 
 pub async fn list_webhooks(
-    State(state): State<std::sync::Arc<crate::AppState>>,
+    State(state): State<std::sync::Arc<AppState>>,
+    merchant: AuthenticatedMerchant,
     Query(query): Query<WebhookQuery>,
 ) -> Result<Json<WebhookListResponse>, AppError> {
-    let limit = query.limit.unwrap_or(50).min(100);
-    let offset = query.offset.unwrap_or(0);
-
-    // TODO: Get merchant from authentication context
-    // For now, get the test merchant
-    let merchant = cryptopay_db::merchants::find_merchant_by_email(&state.db, "test@example.com")
-        .await
-        .map_err(AppError::Internal)?
-        .ok_or(AppError::NotFound("Merchant not found".to_string()))?;
+    let limit = query.limit.unwrap_or(50).clamp(1, 100);
+    let offset = query.offset.unwrap_or(0).max(0);
 
     let webhooks = sqlx::query_as::<_, WebhookDeliveryResponse>(
         r#"
@@ -70,12 +62,12 @@ pub async fn list_webhooks(
         LIMIT $2 OFFSET $3
         "#,
     )
-    .bind(merchant.id)
+    .bind(merchant.0.id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("Database error: {}", e)))?;
+    .map_err(|error| AppError::Internal(error.into()))?;
 
     let total = sqlx::query_scalar::<_, i64>(
         r#"
@@ -86,10 +78,10 @@ pub async fn list_webhooks(
         )
         "#,
     )
-    .bind(merchant.id)
+    .bind(merchant.0.id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("Database error: {}", e)))?;
+    .map_err(|error| AppError::Internal(error.into()))?;
 
     Ok(Json(WebhookListResponse {
         data: webhooks,
@@ -101,7 +93,6 @@ pub async fn list_webhooks(
     }))
 }
 
-pub fn routes() -> axum::Router<std::sync::Arc<crate::AppState>> {
-    axum::Router::new()
-        .route("/v1/webhooks", axum::routing::get(list_webhooks))
+pub fn routes() -> axum::Router<std::sync::Arc<AppState>> {
+    axum::Router::new().route("/v1/webhooks", axum::routing::get(list_webhooks))
 }

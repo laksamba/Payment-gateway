@@ -1,5 +1,4 @@
 use std::time::Duration;
-use std::sync::Mutex;
 use std::fs::OpenOptions;
 use std::io::Write;
 use sqlx::PgPool;
@@ -12,10 +11,12 @@ use crate::get_usdt_contract;
 
 // Direct file logging to bypass buffering
 fn log_directly(message: &str) {
+    let log_path = std::env::var("SCANNER_LOG_PATH")
+        .unwrap_or_else(|_| "scanner_direct.log".to_string());
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("c:\\Users\\sande\\Desktop\\Payment-Gateway\\cryptopay\\scanner_direct.log")
+        .open(log_path)
     {
         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let _ = writeln!(file, "[{}] {}", timestamp, message);
@@ -235,14 +236,30 @@ pub async fn run_scanner(
                 tracing::info!("📊 Confirmation status: block_height={}, tx_block={}, confirmations={}/{}", 
                     current_block, tx_info.block_number, confirmations, required_confirmations);
 
-                let new_status = if tx_info.contract_ret.as_deref() != Some("SUCCESS") {
-                    "failed"
-                } else if confirmations >= required_confirmations {
-                    "confirmed"
-                } else if confirmations > 0 {
-                    "confirming"
-                } else {
-                    payment.status.as_str()
+                let new_status = match tx_info.contract_ret.as_deref() {
+                    Some("SUCCESS") => {
+                        if confirmations >= required_confirmations {
+                            "confirmed"
+                        } else if confirmations > 0 {
+                            "confirming"
+                        } else {
+                            payment.status.as_str()
+                        }
+                    }
+                    Some(_) => "failed",
+                    None => {
+                        tracing::warn!(
+                            "Transaction {} has no explicit contract result yet; keeping payment {} in {}",
+                            tx_hash,
+                            payment.id,
+                            payment.status
+                        );
+                        if confirmations > 0 && payment.status == "detected" {
+                            "confirming"
+                        } else {
+                            payment.status.as_str()
+                        }
+                    }
                 };
 
                 tracing::info!("Status transition: {} → {}", payment.status, new_status);
@@ -316,15 +333,13 @@ pub async fn run_scanner(
                     }
 
                     tracing::info!("Payment confirming: {} ({} confirmations)", payment.id, confirmations);
-                } else {
-                    if let Err(e) = cryptopay_db::payments::update_payment_confirmations(
-                        &pool,
-                        payment.id,
-                        confirmations,
-                        new_status,
-                    ).await {
-                        tracing::error!("Failed to update confirmations for {}: {}", payment.id, e);
-                    }
+                } else if let Err(e) = cryptopay_db::payments::update_payment_confirmations(
+                    &pool,
+                    payment.id,
+                    confirmations,
+                    new_status,
+                ).await {
+                    tracing::error!("Failed to update confirmations for {}: {}", payment.id, e);
                 }
             }
         }

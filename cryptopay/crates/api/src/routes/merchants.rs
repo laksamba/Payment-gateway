@@ -1,31 +1,64 @@
 use std::sync::Arc;
 
 use axum::{
-    routing::{get, post},
-    Router, Json, extract::State,
+    extract::State,
+    routing::{get, post, put},
+    Json, Router,
 };
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::AppState;
-use super::super::AppError;
+use crate::{hash_api_key, AppError, AppState, AuthenticatedMerchant};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v1/merchants/register", post(register_merchant))
-        .route("/api/merchants", get(list_merchants))
+        .route("/v1/merchants/me", get(get_current_merchant))
+        .route("/v1/merchants/me/webhook", put(update_webhook).delete(clear_webhook))
+        .route("/v1/merchants/me/rotate-api-key", post(rotate_api_key))
+        .route(
+            "/v1/merchants/me/rotate-webhook-secret",
+            post(rotate_webhook_secret),
+        )
+        .route("/api/merchants", get(get_current_merchant))
 }
 
 #[derive(serde::Deserialize)]
 struct RegisterRequest {
     name: String,
     email: String,
+    webhook_url: Option<String>,
 }
 
 #[derive(serde::Serialize)]
 struct RegisterResponse {
     merchant_id: uuid::Uuid,
     api_key: String,
+    webhook_secret: String,
+}
+
+#[derive(serde::Serialize)]
+struct MerchantProfileResponse {
+    merchant_id: uuid::Uuid,
+    name: String,
+    email: String,
+    webhook_url: Option<String>,
+    fee_percent: String,
+    is_active: bool,
+    created_at: String,
+}
+
+#[derive(serde::Deserialize)]
+struct UpdateWebhookRequest {
+    webhook_url: String,
+}
+
+#[derive(serde::Serialize)]
+struct RotateApiKeyResponse {
+    api_key: String,
+}
+
+#[derive(serde::Serialize)]
+struct RotateWebhookSecretResponse {
     webhook_secret: String,
 }
 
@@ -39,19 +72,24 @@ async fn register_merchant(
     if req.email.trim().is_empty() {
         return Err(AppError::BadRequest("email must not be empty".to_string()));
     }
+    if let Some(webhook_url) = req.webhook_url.as_deref() {
+        validate_webhook_url(webhook_url)?;
+    }
 
     if cryptopay_db::merchants::find_merchant_by_email(&state.db, &req.email)
         .await
         .map_err(AppError::Internal)?
         .is_some()
     {
-        return Err(AppError::Conflict(format!("email {} already registered", req.email)));
+        return Err(AppError::Conflict(format!(
+            "email {} already registered",
+            req.email
+        )));
     }
 
     let api_key = format!("cpay_live_{}", Uuid::new_v4().to_string().replace('-', ""));
     let webhook_secret = Uuid::new_v4().to_string();
-
-    let api_key_hash = hex::encode(Sha256::digest(api_key.as_bytes()));
+    let api_key_hash = hash_api_key(&api_key);
 
     let merchant = cryptopay_db::merchants::create_merchant(
         &state.db,
@@ -59,6 +97,7 @@ async fn register_merchant(
         &req.email,
         &api_key_hash,
         &webhook_secret,
+        req.webhook_url.as_deref(),
     )
     .await
     .map_err(AppError::Internal)?;
@@ -70,6 +109,98 @@ async fn register_merchant(
     }))
 }
 
-async fn list_merchants() -> &'static str {
-    "merchants"
+async fn get_current_merchant(
+    merchant: AuthenticatedMerchant,
+) -> Json<MerchantProfileResponse> {
+    Json(to_profile_response(&merchant.0))
+}
+
+async fn update_webhook(
+    State(state): State<Arc<AppState>>,
+    merchant: AuthenticatedMerchant,
+    Json(req): Json<UpdateWebhookRequest>,
+) -> Result<Json<MerchantProfileResponse>, AppError> {
+    validate_webhook_url(&req.webhook_url)?;
+
+    let merchant = cryptopay_db::merchants::update_merchant_webhook_url(
+        &state.db,
+        merchant.0.id,
+        Some(req.webhook_url.trim()),
+    )
+    .await
+    .map_err(AppError::Internal)?;
+
+    Ok(Json(to_profile_response(&merchant)))
+}
+
+async fn clear_webhook(
+    State(state): State<Arc<AppState>>,
+    merchant: AuthenticatedMerchant,
+) -> Result<Json<MerchantProfileResponse>, AppError> {
+    let merchant =
+        cryptopay_db::merchants::update_merchant_webhook_url(&state.db, merchant.0.id, None)
+            .await
+            .map_err(AppError::Internal)?;
+
+    Ok(Json(to_profile_response(&merchant)))
+}
+
+async fn rotate_api_key(
+    State(state): State<Arc<AppState>>,
+    merchant: AuthenticatedMerchant,
+) -> Result<Json<RotateApiKeyResponse>, AppError> {
+    let api_key = format!("cpay_live_{}", Uuid::new_v4().to_string().replace('-', ""));
+    let api_key_hash = hash_api_key(&api_key);
+
+    cryptopay_db::merchants::update_merchant_api_key_hash(&state.db, merchant.0.id, &api_key_hash)
+        .await
+        .map_err(AppError::Internal)?;
+
+    Ok(Json(RotateApiKeyResponse { api_key }))
+}
+
+async fn rotate_webhook_secret(
+    State(state): State<Arc<AppState>>,
+    merchant: AuthenticatedMerchant,
+) -> Result<Json<RotateWebhookSecretResponse>, AppError> {
+    let webhook_secret = Uuid::new_v4().to_string();
+
+    cryptopay_db::merchants::update_merchant_webhook_secret(
+        &state.db,
+        merchant.0.id,
+        &webhook_secret,
+    )
+    .await
+    .map_err(AppError::Internal)?;
+
+    Ok(Json(RotateWebhookSecretResponse { webhook_secret }))
+}
+
+fn to_profile_response(merchant: &cryptopay_core::Merchant) -> MerchantProfileResponse {
+    MerchantProfileResponse {
+        merchant_id: merchant.id,
+        name: merchant.name.clone(),
+        email: merchant.email.clone(),
+        webhook_url: merchant.webhook_url.clone(),
+        fee_percent: merchant.fee_percent.to_string(),
+        is_active: merchant.is_active,
+        created_at: merchant.created_at.to_rfc3339(),
+    }
+}
+
+fn validate_webhook_url(url: &str) -> Result<(), AppError> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest(
+            "webhook_url must not be empty".to_string(),
+        ));
+    }
+
+    if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
+        return Err(AppError::BadRequest(
+            "webhook_url must start with http:// or https://".to_string(),
+        ));
+    }
+
+    Ok(())
 }

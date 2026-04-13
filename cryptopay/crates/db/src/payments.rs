@@ -1,27 +1,76 @@
 use bs58;
 use chrono::{Duration, Utc};
+use hmac::{Hmac, Mac};
+use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use sha2::{Digest, Sha256};
+use sha3::Keccak256;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use cryptopay_core::{Payment, PaymentStatus};
 
-fn generate_deposit_address() -> String {
+type HmacSha256 = Hmac<Sha256>;
+
+fn generate_deposit_address(
+    master_wallet_private_key: &str,
+    payment_id: Uuid,
+) -> anyhow::Result<String> {
+    let secret_key = derive_child_secret_key(master_wallet_private_key, payment_id)?;
+    let secp = Secp256k1::new();
+    let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+    let uncompressed_public_key = public_key.serialize_uncompressed();
+    let hashed_public_key = Keccak256::digest(&uncompressed_public_key[1..]);
+
     let mut address_bytes = [0u8; 21];
-    address_bytes[0] = 0x41; // Tron address version byte
+    address_bytes[0] = 0x41;
+    address_bytes[1..].copy_from_slice(&hashed_public_key[12..]);
 
-    let u1 = Uuid::new_v4();
-    let u2 = Uuid::new_v4();
-    let uuid1 = u1.as_bytes();
-    let uuid2 = u2.as_bytes();
-    address_bytes[1..17].copy_from_slice(uuid1);
-    address_bytes[17..21].copy_from_slice(&uuid2[..4]);
-
-    let checksum = Sha256::digest(&Sha256::digest(&address_bytes));
+    let checksum = Sha256::digest(Sha256::digest(address_bytes));
     let mut full = address_bytes.to_vec();
     full.extend_from_slice(&checksum[..4]);
 
-    bs58::encode(full).into_string()
+    Ok(bs58::encode(full).into_string())
+}
+
+fn derive_child_secret_key(
+    master_wallet_private_key: &str,
+    payment_id: Uuid,
+) -> anyhow::Result<SecretKey> {
+    let master_key_bytes = parse_master_private_key(master_wallet_private_key)?;
+
+    for counter in 0u32..=u32::MAX {
+        let mut mac = HmacSha256::new_from_slice(&master_key_bytes)
+            .expect("HMAC can take keys of any size");
+        mac.update(b"cryptopay:tron:deposit");
+        mac.update(payment_id.as_bytes());
+        mac.update(&counter.to_be_bytes());
+
+        let candidate = mac.finalize().into_bytes();
+        if let Ok(secret_key) = SecretKey::from_slice(&candidate) {
+            return Ok(secret_key);
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "failed to derive a valid deposit private key for payment {}",
+        payment_id
+    ))
+}
+
+fn parse_master_private_key(master_wallet_private_key: &str) -> anyhow::Result<[u8; 32]> {
+    let trimmed = master_wallet_private_key.trim().trim_start_matches("0x");
+    let decoded = hex::decode(trimmed)
+        .map_err(|error| anyhow::anyhow!("invalid MASTER_WALLET_PRIVATE_KEY hex: {}", error))?;
+
+    if decoded.len() != 32 {
+        return Err(anyhow::anyhow!(
+            "MASTER_WALLET_PRIVATE_KEY must be exactly 32 bytes"
+        ));
+    }
+
+    let mut key_bytes = [0u8; 32];
+    key_bytes.copy_from_slice(&decoded);
+    Ok(key_bytes)
 }
 
 pub async fn create_payment(
@@ -31,23 +80,26 @@ pub async fn create_payment(
     currency: &str,
     idempotency_key: Option<&str>,
     metadata: serde_json::Value,
+    master_wallet_private_key: &str,
 ) -> anyhow::Result<Payment> {
-    let deposit_address = generate_deposit_address();
+    let payment_id = Uuid::new_v4();
+    let deposit_address = generate_deposit_address(master_wallet_private_key, payment_id)?;
     let expires_at = Utc::now() + Duration::minutes(30);
     let status = PaymentStatus::Pending;
 
     let payment = sqlx::query_as::<_, Payment>(
         r#"
         INSERT INTO payments (
-            merchant_id, amount, currency, deposit_address, status,
+            id, merchant_id, amount, currency, deposit_address, status,
             idempotency_key, metadata, expires_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING id, merchant_id, amount, currency, deposit_address, status,
                   tx_hash, confirmations, required_confirmations,
                   idempotency_key, metadata, expires_at, confirmed_at, created_at
         "#,
     )
+    .bind(payment_id)
     .bind(merchant_id)
     .bind(amount)
     .bind(currency)
@@ -76,6 +128,28 @@ pub async fn find_payment_by_id(
         "#,
     )
     .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(payment)
+}
+
+pub async fn find_payment_by_id_and_merchant(
+    pool: &PgPool,
+    id: Uuid,
+    merchant_id: Uuid,
+) -> anyhow::Result<Option<Payment>> {
+    let payment = sqlx::query_as::<_, Payment>(
+        r#"
+        SELECT id, merchant_id, amount, currency, deposit_address, status,
+               tx_hash, confirmations, required_confirmations,
+               idempotency_key, metadata, expires_at, confirmed_at, created_at
+        FROM payments
+        WHERE id = $1 AND merchant_id = $2
+        "#,
+    )
+    .bind(id)
+    .bind(merchant_id)
     .fetch_optional(pool)
     .await?;
 
@@ -117,7 +191,8 @@ pub async fn list_payments(
                idempotency_key, metadata, expires_at, confirmed_at, created_at
         FROM payments
         WHERE merchant_id = $1
-    "#.to_string();
+    "#
+    .to_string();
 
     let mut bind_count = 1;
     if status_filter.is_some() {
@@ -125,7 +200,11 @@ pub async fn list_payments(
         bind_count += 1;
     }
 
-    query.push_str(&format!(" ORDER BY created_at DESC LIMIT ${} OFFSET ${}", bind_count + 1, bind_count + 2));
+    query.push_str(&format!(
+        " ORDER BY created_at DESC LIMIT ${} OFFSET ${}",
+        bind_count + 1,
+        bind_count + 2
+    ));
 
     let mut sql_query = sqlx::query_as::<_, Payment>(&query).bind(merchant_id);
 
@@ -254,7 +333,6 @@ pub async fn mark_payment_detected(
     id: Uuid,
     tx_hash: &str,
 ) -> anyhow::Result<()> {
-    // First, check current payment state before updating
     let current_payment = sqlx::query_as::<_, Payment>(
         "SELECT id, merchant_id, amount, currency, deposit_address, status,
                 tx_hash, confirmations, required_confirmations,
@@ -266,17 +344,18 @@ pub async fn mark_payment_detected(
     .await?;
 
     let payment = match current_payment {
-        Some(p) => p,
+        Some(payment) => payment,
         None => {
             return Err(anyhow::anyhow!("Payment {} not found", id));
         }
     };
 
-    // Check if payment is still pending
     if payment.status != "pending" {
         return Err(anyhow::anyhow!(
             "Cannot mark payment {} as detected: current status is '{}' (not 'pending'). Existing tx_hash: {:?}",
-            id, payment.status, payment.tx_hash
+            id,
+            payment.status,
+            payment.tx_hash
         ));
     }
 
@@ -300,4 +379,41 @@ pub async fn mark_payment_detected(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use sha2::{Digest, Sha256};
+    use uuid::Uuid;
+
+    use super::generate_deposit_address;
+
+    #[test]
+    fn generated_address_is_deterministic_and_valid_base58check() {
+        let master_wallet_private_key =
+            "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f6a0876fddf2d6a8fe";
+        let payment_id =
+            Uuid::parse_str("11111111-2222-3333-4444-555555555555").expect("valid uuid");
+
+        let address = generate_deposit_address(master_wallet_private_key, payment_id)
+            .expect("address should be generated");
+        let decoded = bs58::decode(&address).into_vec().expect("valid base58");
+
+        assert!(address.starts_with('T'));
+        assert_eq!(decoded.len(), 25);
+        assert_eq!(decoded[0], 0x41);
+
+        let checksum = Sha256::digest(Sha256::digest(&decoded[..21]));
+        assert_eq!(&decoded[21..], &checksum[..4]);
+        assert_eq!(
+            address,
+            generate_deposit_address(master_wallet_private_key, payment_id)
+                .expect("address should be stable")
+        );
+        assert_ne!(
+            address,
+            generate_deposit_address(master_wallet_private_key, Uuid::new_v4())
+                .expect("different payment ids must produce different addresses")
+        );
+    }
 }
