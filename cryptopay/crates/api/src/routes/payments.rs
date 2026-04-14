@@ -34,6 +34,23 @@ struct CreatePaymentResponse {
     expires_at: String,
 }
 
+#[derive(serde::Serialize)]
+struct MerchantPaymentResponse {
+    payment_id: uuid::Uuid,
+    amount: String,
+    currency: String,
+    deposit_address: String,
+    status: String,
+    tx_hash: Option<String>,
+    confirmations: i32,
+    required_confirmations: i32,
+    idempotency_key: Option<String>,
+    metadata: serde_json::Value,
+    expires_at: String,
+    confirmed_at: Option<String>,
+    created_at: String,
+}
+
 #[derive(Deserialize)]
 struct ListPaymentsQuery {
     status: Option<String>,
@@ -51,7 +68,7 @@ struct PaginationInfo {
 
 #[derive(serde::Serialize)]
 struct ListPaymentsResponse {
-    data: Vec<Payment>,
+    data: Vec<MerchantPaymentResponse>,
     pagination: PaginationInfo,
 }
 
@@ -181,7 +198,7 @@ async fn list_payments(
     let pages = (total + limit - 1) / limit;
 
     Ok(Json(ListPaymentsResponse {
-        data: payments,
+        data: payments.iter().map(to_public_payment_response).collect(),
         pagination: PaginationInfo {
             total,
             page,
@@ -195,14 +212,14 @@ async fn get_payment(
     State(state): State<Arc<AppState>>,
     merchant: AuthenticatedMerchant,
     Path(payment_id): Path<uuid::Uuid>,
-) -> Result<Json<Payment>, AppError> {
+) -> Result<Json<MerchantPaymentResponse>, AppError> {
     let payment =
         cryptopay_db::payments::find_payment_by_id_and_merchant(&state.db, payment_id, merchant.0.id)
             .await
             .map_err(AppError::Internal)?
             .ok_or(AppError::NotFound("Payment not found".to_string()))?;
 
-    Ok(Json(payment))
+    Ok(Json(to_public_payment_response(&payment)))
 }
 
 fn to_create_payment_response(payment: &Payment) -> CreatePaymentResponse {
@@ -213,6 +230,24 @@ fn to_create_payment_response(payment: &Payment) -> CreatePaymentResponse {
         currency: payment.currency.clone(),
         status: payment.status.clone(),
         expires_at: payment.expires_at.to_rfc3339(),
+    }
+}
+
+fn to_public_payment_response(payment: &Payment) -> MerchantPaymentResponse {
+    MerchantPaymentResponse {
+        payment_id: payment.id,
+        amount: payment.amount.to_string(),
+        currency: payment.currency.clone(),
+        deposit_address: payment.deposit_address.clone(),
+        status: payment.status.clone(),
+        tx_hash: payment.tx_hash.clone(),
+        confirmations: payment.confirmations,
+        required_confirmations: payment.required_confirmations,
+        idempotency_key: payment.idempotency_key.clone(),
+        metadata: payment.metadata.clone(),
+        expires_at: payment.expires_at.to_rfc3339(),
+        confirmed_at: payment.confirmed_at.map(|value| value.to_rfc3339()),
+        created_at: payment.created_at.to_rfc3339(),
     }
 }
 
