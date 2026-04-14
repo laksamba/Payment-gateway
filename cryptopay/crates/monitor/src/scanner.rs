@@ -62,8 +62,13 @@ pub async fn run_scanner(
         if !pending_payments.is_empty() {
             tracing::info!("Scanner cycle: Found {} pending payments - querying TronGrid", pending_payments.len());
 
+            // Track tx_hash -> amount pairs we've already matched in this scan cycle.
+            // Prevents the same on-chain tx from confirming multiple payments.
+            let mut used_txs: std::collections::HashMap<String, Decimal> =
+                std::collections::HashMap::new();
+
             for payment in pending_payments {
-                tracing::debug!("Checking payment {}: address={}, amount={}, status={}", 
+                tracing::debug!("Checking payment {}: address={}, amount={}, status={}",
                     payment.id, payment.deposit_address, payment.amount, payment.status);
 
                 // Get recent TRC20 transactions for this deposit address
@@ -88,8 +93,8 @@ pub async fn run_scanner(
 
                 // Check for matching transactions
                 for (idx, tx) in transactions.iter().enumerate() {
-                    tracing::debug!("Transaction {}: id={}, from={}, to={}, value={}", 
-                        idx, 
+                    tracing::debug!("Transaction {}: id={}, from={}, to={}, value={}",
+                        idx,
                         if tx.transaction_id.is_empty() { "EMPTY" } else { &tx.transaction_id[..20.min(tx.transaction_id.len())] },
                         &tx.from[..10.min(tx.from.len())],
                         &tx.to[..10.min(tx.to.len())],
@@ -107,12 +112,10 @@ pub async fn run_scanner(
                     let deposit_addr_lower = payment.deposit_address.to_lowercase();
 
                     if tx_to_lower != deposit_addr_lower {
-                        tracing::debug!("Transaction {} address mismatch: tx.to='{}' != deposit_address='{}'", 
+                        tracing::debug!("Transaction {} address mismatch: tx.to='{}' != deposit_address='{}'",
                             idx, tx.to, payment.deposit_address);
                         continue;
                     }
-
-                    tracing::info!("Address match for payment {}! Processing transaction...", payment.id);
 
                     // Parse the value (USDT has 6 decimals)
                     let tx_value = match tx.value.parse::<u128>() {
@@ -125,10 +128,19 @@ pub async fn run_scanner(
 
                     tracing::info!("Transaction amount check: receipt={} vs required={}", tx_value, payment.amount);
 
-                    // Check if the transaction amount meets or exceeds the payment amount
-                    if tx_value >= payment.amount {
-                        tracing::info!("✓ Amount MATCH! Attempting to mark payment {} as detected with tx_hash: {}", payment.id, tx.transaction_id);
-                        
+                    // Reject if this tx_hash was already used by another payment in this scan cycle.
+                    if let Some(claimed_by_amount) = used_txs.get(&tx.transaction_id) {
+                        tracing::warn!(
+                            "Transaction {} already claimed by payment amount {} (current: {}), skipping",
+                            tx.transaction_id, claimed_by_amount, payment.amount
+                        );
+                        continue;
+                    }
+
+                    // Exact amount match required for non-custodial (single shared address per merchant)
+                    if tx_value == payment.amount {
+                        tracing::info!("✓ Exact amount MATCH! Attempting to mark payment {} as detected with tx_hash: {}", payment.id, tx.transaction_id);
+
                         // Mark payment as detected
                         match cryptopay_db::payments::mark_payment_detected(
                             &pool,
@@ -137,6 +149,7 @@ pub async fn run_scanner(
                         ).await {
                             Ok(_) => {
                                 tracing::info!("✓✓ Payment {} successfully marked as detected!", payment.id);
+                                used_txs.insert(tx.transaction_id.clone(), payment.amount);
                             },
                             Err(e) => {
                                 tracing::error!("✗ FAILED to mark payment {} as detected: {}", payment.id, e);
@@ -148,7 +161,7 @@ pub async fn run_scanner(
 
                         break; // Stop checking other transactions for this payment
                     } else {
-                        tracing::warn!("Transaction value {} < payment amount {} for payment {}", tx_value, payment.amount, payment.id);
+                        tracing::warn!("Transaction value {} != payment amount {} for payment {}", tx_value, payment.amount, payment.id);
                     }
                 }
             }

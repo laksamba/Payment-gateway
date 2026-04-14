@@ -13,7 +13,6 @@ use sha2::{Digest, Sha256};
 pub struct Config {
     pub database_url: String,
     pub trongrid_api_key: String,
-    pub master_wallet_private_key: String,
     pub server_port: u16,
 }
 
@@ -21,8 +20,6 @@ impl Config {
     pub fn from_env() -> Self {
         let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
         let trongrid_api_key = std::env::var("TRONGRID_API_KEY").expect("TRONGRID_API_KEY must be set");
-        let master_wallet_private_key = std::env::var("MASTER_WALLET_PRIVATE_KEY")
-            .expect("MASTER_WALLET_PRIVATE_KEY must be set");
         let server_port = std::env::var("SERVER_PORT")
             .unwrap_or_else(|_| "8080".to_string())
             .parse()
@@ -31,7 +28,6 @@ impl Config {
         Self {
             database_url,
             trongrid_api_key,
-            master_wallet_private_key,
             server_port,
         }
     }

@@ -86,6 +86,19 @@ async fn create_payment(
         ));
     }
 
+    let withdrawal_address = merchant
+        .0
+        .withdrawal_address
+        .as_deref()
+        .ok_or_else(|| {
+            tracing::warn!("Merchant {} has no withdrawal_address set", merchant.0.id);
+            AppError::BadRequest(
+                "Set your withdrawal wallet address first via POST /v1/merchants/settings".to_string(),
+            )
+        })?;
+
+    tracing::info!("Creating payment for merchant {} with withdrawal_address: {}", merchant.0.id, withdrawal_address);
+
     let idempotency_key = req.idempotency_key.as_deref();
     let metadata = req.metadata.unwrap_or(serde_json::json!({}));
 
@@ -127,7 +140,7 @@ async fn create_payment(
         &req.currency,
         idempotency_key,
         metadata.clone(),
-        &state.config.master_wallet_private_key,
+        withdrawal_address,
     )
     .await;
 
@@ -163,10 +176,12 @@ async fn create_payment(
         }
         Err(err) => {
             tracing::error!(
-                "Failed to create payment for merchant {}: {}",
+                "Failed to create payment for merchant {}: {:?}",
                 merchant.0.id,
-                err
+                &err
             );
+            let db_err_msg = err.to_string();
+            tracing::error!("DB error detail: {}", db_err_msg);
             Err(AppError::Internal(err))
         }
     }
@@ -186,14 +201,22 @@ async fn list_payments(
         status.parse::<PaymentStatus>().map_err(AppError::BadRequest)?;
     }
 
+    tracing::info!("Listing payments for merchant {}: status={:?}, limit={}, offset={}", merchant.0.id, status_filter, limit, offset);
+
     let payments =
         cryptopay_db::payments::list_payments(&state.db, merchant.0.id, status_filter, limit, offset)
             .await
-            .map_err(AppError::Internal)?;
+            .map_err(|e| {
+                tracing::error!("list_payments failed for merchant {}: {:?}", merchant.0.id, e);
+                AppError::Internal(e)
+            })?;
 
     let total = cryptopay_db::payments::count_payments(&state.db, merchant.0.id, status_filter)
         .await
-        .map_err(AppError::Internal)?;
+        .map_err(|e| {
+            tracing::error!("count_payments failed for merchant {}: {:?}", merchant.0.id, e);
+            AppError::Internal(e)
+        })?;
 
     let pages = (total + limit - 1) / limit;
 
@@ -213,10 +236,14 @@ async fn get_payment(
     merchant: AuthenticatedMerchant,
     Path(payment_id): Path<uuid::Uuid>,
 ) -> Result<Json<MerchantPaymentResponse>, AppError> {
+    tracing::info!("Getting payment {} for merchant {}", payment_id, merchant.0.id);
     let payment =
         cryptopay_db::payments::find_payment_by_id_and_merchant(&state.db, payment_id, merchant.0.id)
             .await
-            .map_err(AppError::Internal)?
+            .map_err(|e| {
+                tracing::error!("find_payment_by_id_and_merchant failed for payment {}: {:?}", payment_id, e);
+                AppError::Internal(e)
+            })?
             .ok_or(AppError::NotFound("Payment not found".to_string()))?;
 
     Ok(Json(to_public_payment_response(&payment)))

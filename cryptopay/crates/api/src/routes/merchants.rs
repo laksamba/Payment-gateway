@@ -19,6 +19,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/v1/merchants/me/rotate-webhook-secret",
             post(rotate_webhook_secret),
         )
+        .route("/v1/merchants/settings", post(update_settings))
         .route("/api/merchants", get(get_current_merchant))
 }
 
@@ -41,6 +42,7 @@ struct MerchantProfileResponse {
     merchant_id: uuid::Uuid,
     name: String,
     email: String,
+    withdrawal_address: Option<String>,
     webhook_url: Option<String>,
     fee_percent: String,
     is_active: bool,
@@ -60,6 +62,16 @@ struct RotateApiKeyResponse {
 #[derive(serde::Serialize)]
 struct RotateWebhookSecretResponse {
     webhook_secret: String,
+}
+
+#[derive(serde::Deserialize)]
+struct UpdateSettingsRequest {
+    withdrawal_address: String,
+}
+
+#[derive(serde::Serialize)]
+struct UpdateSettingsResponse {
+    saved: bool,
 }
 
 async fn register_merchant(
@@ -176,11 +188,38 @@ async fn rotate_webhook_secret(
     Ok(Json(RotateWebhookSecretResponse { webhook_secret }))
 }
 
+async fn update_settings(
+    State(state): State<Arc<AppState>>,
+    merchant: AuthenticatedMerchant,
+    Json(req): Json<UpdateSettingsRequest>,
+) -> Result<Json<UpdateSettingsResponse>, AppError> {
+    let addr = req.withdrawal_address.trim();
+
+    if !addr.starts_with('T') {
+        return Err(AppError::BadRequest(
+            "withdrawal_address must start with 'T'".to_string(),
+        ));
+    }
+
+    if addr.len() != 34 {
+        return Err(AppError::BadRequest(
+            "withdrawal_address must be exactly 34 characters".to_string(),
+        ));
+    }
+
+    cryptopay_db::merchants::update_withdrawal_address(&state.db, merchant.0.id, addr)
+        .await
+        .map_err(AppError::Internal)?;
+
+    Ok(Json(UpdateSettingsResponse { saved: true }))
+}
+
 fn to_profile_response(merchant: &cryptopay_core::Merchant) -> MerchantProfileResponse {
     MerchantProfileResponse {
         merchant_id: merchant.id,
         name: merchant.name.clone(),
         email: merchant.email.clone(),
+        withdrawal_address: merchant.withdrawal_address.clone(),
         webhook_url: merchant.webhook_url.clone(),
         fee_percent: merchant.fee_percent.to_string(),
         is_active: merchant.is_active,

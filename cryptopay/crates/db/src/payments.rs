@@ -1,15 +1,8 @@
-use bs58;
 use chrono::{Duration, Utc};
-use hmac::{Hmac, Mac};
-use secp256k1::{PublicKey, Secp256k1, SecretKey};
-use sha2::{Digest, Sha256};
-use sha3::Keccak256;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use cryptopay_core::{Payment, PaymentStatus};
-
-type HmacSha256 = Hmac<Sha256>;
 
 const PAYMENT_COLUMNS: &str = r#"
     id, merchant_id, amount, currency, deposit_address, status,
@@ -18,79 +11,6 @@ const PAYMENT_COLUMNS: &str = r#"
     sweep_status, sweep_tx_hash, swept_at, sweep_error
 "#;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DerivedDepositWallet {
-    pub payment_id: Uuid,
-    pub deposit_address: String,
-    pub private_key_hex: String,
-}
-
-pub fn derive_deposit_wallet(
-    master_wallet_private_key: &str,
-    payment_id: Uuid,
-) -> anyhow::Result<DerivedDepositWallet> {
-    let secret_key = derive_child_secret_key(master_wallet_private_key, payment_id)?;
-    let secp = Secp256k1::new();
-    let public_key = PublicKey::from_secret_key(&secp, &secret_key);
-    let uncompressed_public_key = public_key.serialize_uncompressed();
-    let hashed_public_key = Keccak256::digest(&uncompressed_public_key[1..]);
-
-    let mut address_bytes = [0u8; 21];
-    address_bytes[0] = 0x41;
-    address_bytes[1..].copy_from_slice(&hashed_public_key[12..]);
-
-    let checksum = Sha256::digest(Sha256::digest(address_bytes));
-    let mut full = address_bytes.to_vec();
-    full.extend_from_slice(&checksum[..4]);
-
-    Ok(DerivedDepositWallet {
-        payment_id,
-        deposit_address: bs58::encode(full).into_string(),
-        private_key_hex: hex::encode(secret_key.secret_bytes()),
-    })
-}
-
-fn derive_child_secret_key(
-    master_wallet_private_key: &str,
-    payment_id: Uuid,
-) -> anyhow::Result<SecretKey> {
-    let master_key_bytes = parse_master_private_key(master_wallet_private_key)?;
-
-    for counter in 0u32..=u32::MAX {
-        let mut mac =
-            HmacSha256::new_from_slice(&master_key_bytes).expect("HMAC can take keys of any size");
-        mac.update(b"cryptopay:tron:deposit");
-        mac.update(payment_id.as_bytes());
-        mac.update(&counter.to_be_bytes());
-
-        let candidate = mac.finalize().into_bytes();
-        if let Ok(secret_key) = SecretKey::from_slice(&candidate) {
-            return Ok(secret_key);
-        }
-    }
-
-    Err(anyhow::anyhow!(
-        "failed to derive a valid deposit private key for payment {}",
-        payment_id
-    ))
-}
-
-fn parse_master_private_key(master_wallet_private_key: &str) -> anyhow::Result<[u8; 32]> {
-    let trimmed = master_wallet_private_key.trim().trim_start_matches("0x");
-    let decoded = hex::decode(trimmed)
-        .map_err(|error| anyhow::anyhow!("invalid MASTER_WALLET_PRIVATE_KEY hex: {}", error))?;
-
-    if decoded.len() != 32 {
-        return Err(anyhow::anyhow!(
-            "MASTER_WALLET_PRIVATE_KEY must be exactly 32 bytes"
-        ));
-    }
-
-    let mut key_bytes = [0u8; 32];
-    key_bytes.copy_from_slice(&decoded);
-    Ok(key_bytes)
-}
-
 pub async fn create_payment(
     pool: &PgPool,
     merchant_id: Uuid,
@@ -98,10 +18,9 @@ pub async fn create_payment(
     currency: &str,
     idempotency_key: Option<&str>,
     metadata: serde_json::Value,
-    master_wallet_private_key: &str,
+    deposit_address: &str,
 ) -> anyhow::Result<Payment> {
     let payment_id = Uuid::new_v4();
-    let derived_wallet = derive_deposit_wallet(master_wallet_private_key, payment_id)?;
     let expires_at = Utc::now() + Duration::minutes(30);
     let status = PaymentStatus::Pending;
 
@@ -122,7 +41,7 @@ pub async fn create_payment(
         .bind(merchant_id)
         .bind(amount)
         .bind(currency)
-        .bind(&derived_wallet.deposit_address)
+        .bind(deposit_address)
         .bind(status.to_string())
         .bind(idempotency_key)
         .bind(metadata)
@@ -482,45 +401,4 @@ pub async fn mark_payment_detected(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use sha2::{Digest, Sha256};
-    use uuid::Uuid;
-
-    use super::derive_deposit_wallet;
-
-    #[test]
-    fn generated_address_is_deterministic_and_valid_base58check() {
-        let master_wallet_private_key =
-            "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f6a0876fddf2d6a8fe";
-        let payment_id =
-            Uuid::parse_str("11111111-2222-3333-4444-555555555555").expect("valid uuid");
-
-        let wallet = derive_deposit_wallet(master_wallet_private_key, payment_id)
-            .expect("address should be generated");
-        let decoded = bs58::decode(&wallet.deposit_address)
-            .into_vec()
-            .expect("valid base58");
-
-        assert!(wallet.deposit_address.starts_with('T'));
-        assert_eq!(decoded.len(), 25);
-        assert_eq!(decoded[0], 0x41);
-        assert_eq!(wallet.private_key_hex.len(), 64);
-
-        let checksum = Sha256::digest(Sha256::digest(&decoded[..21]));
-        assert_eq!(&decoded[21..], &checksum[..4]);
-        assert_eq!(
-            wallet,
-            derive_deposit_wallet(master_wallet_private_key, payment_id)
-                .expect("address should be stable")
-        );
-        assert_ne!(
-            wallet.deposit_address,
-            derive_deposit_wallet(master_wallet_private_key, Uuid::new_v4())
-                .expect("different payment ids must produce different addresses")
-                .deposit_address
-        );
-    }
 }

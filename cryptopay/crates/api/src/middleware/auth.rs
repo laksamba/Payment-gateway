@@ -30,8 +30,14 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedMerchant {
 
         let merchant = cryptopay_db::merchants::find_merchant_by_api_key_hash(&state.db, &hash)
             .await
-            .map_err(AppError::Internal)?
-            .ok_or(AppError::Unauthorized)?;
+            .map_err(|e| {
+                tracing::error!("find_merchant_by_api_key_hash failed: {:?}", e);
+                AppError::Internal(e)
+            })?
+            .ok_or_else(|| {
+                tracing::warn!("No merchant found for API key hash");
+                AppError::Unauthorized
+            })?;
 
         if !merchant.is_active {
             return Err(AppError::Unauthorized);
