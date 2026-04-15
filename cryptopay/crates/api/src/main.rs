@@ -41,6 +41,7 @@ async fn main() -> Result<()> {
         .route("/health", get(health_check))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
+        .merge(cryptopay_api::routes::auth::routes())
         .merge(cryptopay_api::routes::merchants::routes())
         .merge(cryptopay_api::routes::payments::routes())
         .merge(cryptopay_api::routes::webhooks::routes())

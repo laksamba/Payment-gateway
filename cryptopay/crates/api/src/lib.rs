@@ -41,6 +41,7 @@ pub struct AppState {
 
 pub fn app() -> Router<Arc<AppState>> {
     Router::new()
+        .merge(routes::auth::routes())
         .merge(routes::merchants::routes())
         .merge(routes::payments::routes())
         .merge(routes::webhooks::routes())

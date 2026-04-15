@@ -16,6 +16,7 @@ pub struct Merchant {
     pub name: String,
     pub email: String,
     pub api_key_hash: String,
+    pub password_hash: Option<String>,
     pub withdrawal_address: Option<String>,
     pub webhook_url: Option<String>,
     pub webhook_secret: String,

@@ -9,12 +9,13 @@ pub async fn create_merchant(
     api_key_hash: &str,
     webhook_secret: &str,
     webhook_url: Option<&str>,
+    password_hash: Option<&str>,
 ) -> anyhow::Result<Merchant> {
     let merchant = sqlx::query_as::<_, Merchant>(
         r#"
-        INSERT INTO merchants (name, email, api_key_hash, webhook_secret, webhook_url)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, name, email, api_key_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
+        INSERT INTO merchants (name, email, api_key_hash, webhook_secret, webhook_url, password_hash)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, name, email, api_key_hash, password_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
         "#,
     )
     .bind(name)
@@ -22,6 +23,7 @@ pub async fn create_merchant(
     .bind(api_key_hash)
     .bind(webhook_secret)
     .bind(webhook_url)
+    .bind(password_hash)
     .fetch_one(pool)
     .await?;
 
@@ -38,7 +40,7 @@ pub async fn update_merchant_webhook_url(
         UPDATE merchants
         SET webhook_url = $1
         WHERE id = $2
-        RETURNING id, name, email, api_key_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
+        RETURNING id, name, email, api_key_hash, password_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
         "#,
     )
     .bind(webhook_url)
@@ -59,7 +61,7 @@ pub async fn update_merchant_api_key_hash(
         UPDATE merchants
         SET api_key_hash = $1
         WHERE id = $2
-        RETURNING id, name, email, api_key_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
+        RETURNING id, name, email, api_key_hash, password_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
         "#,
     )
     .bind(api_key_hash)
@@ -80,7 +82,7 @@ pub async fn update_merchant_webhook_secret(
         UPDATE merchants
         SET webhook_secret = $1
         WHERE id = $2
-        RETURNING id, name, email, api_key_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
+        RETURNING id, name, email, api_key_hash, password_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
         "#,
     )
     .bind(webhook_secret)
@@ -97,7 +99,7 @@ pub async fn find_merchant_by_api_key_hash(
 ) -> anyhow::Result<Option<Merchant>> {
     let merchant = sqlx::query_as::<_, Merchant>(
         r#"
-        SELECT id, name, email, api_key_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
+        SELECT id, name, email, api_key_hash, password_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
         FROM merchants
         WHERE api_key_hash = $1
         "#,
@@ -115,7 +117,7 @@ pub async fn find_merchant_by_email(
 ) -> anyhow::Result<Option<Merchant>> {
     let merchant = sqlx::query_as::<_, Merchant>(
         r#"
-        SELECT id, name, email, api_key_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
+        SELECT id, name, email, api_key_hash, password_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
         FROM merchants
         WHERE email = $1
         "#,
@@ -133,7 +135,7 @@ pub async fn find_merchant_by_id(
 ) -> anyhow::Result<Option<Merchant>> {
     let merchant = sqlx::query_as::<_, Merchant>(
         r#"
-        SELECT id, name, email, api_key_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
+        SELECT id, name, email, api_key_hash, password_hash, withdrawal_address, webhook_url, webhook_secret, fee_percent, is_active, created_at
         FROM merchants
         WHERE id = $1
         "#,

@@ -27,6 +27,7 @@ pub fn routes() -> Router<Arc<AppState>> {
 struct RegisterRequest {
     name: String,
     email: String,
+    password: String,
     webhook_url: Option<String>,
 }
 
@@ -84,20 +85,34 @@ async fn register_merchant(
     if req.email.trim().is_empty() {
         return Err(AppError::BadRequest("email must not be empty".to_string()));
     }
+    if req.password.is_empty() {
+        return Err(AppError::BadRequest("password must not be empty".to_string()));
+    }
+    if req.password.len() < 8 {
+        return Err(AppError::BadRequest("password must be at least 8 characters".to_string()));
+    }
     if let Some(webhook_url) = req.webhook_url.as_deref() {
         validate_webhook_url(webhook_url)?;
     }
 
-    if cryptopay_db::merchants::find_merchant_by_email(&state.db, &req.email)
+    let email = req.email.trim().to_lowercase();
+
+    if cryptopay_db::merchants::find_merchant_by_email(&state.db, &email)
         .await
         .map_err(AppError::Internal)?
         .is_some()
     {
         return Err(AppError::Conflict(format!(
             "email {} already registered",
-            req.email
+            email
         )));
     }
+
+    let password_hash = bcrypt::hash(&req.password, bcrypt::DEFAULT_COST)
+        .map_err(|e| {
+            tracing::error!("bcrypt hash failed: {:?}", e);
+            AppError::Internal(anyhow::anyhow!("password hashing failed"))
+        })?;
 
     let api_key = format!("cpay_live_{}", Uuid::new_v4().to_string().replace('-', ""));
     let webhook_secret = Uuid::new_v4().to_string();
@@ -106,10 +121,11 @@ async fn register_merchant(
     let merchant = cryptopay_db::merchants::create_merchant(
         &state.db,
         &req.name,
-        &req.email,
+        &email,
         &api_key_hash,
         &webhook_secret,
         req.webhook_url.as_deref(),
+        Some(&password_hash),
     )
     .await
     .map_err(AppError::Internal)?;

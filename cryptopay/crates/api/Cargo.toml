@@ -23,6 +23,7 @@ hex = { workspace = true }
 async-trait = { workspace = true }
 rust_decimal = { workspace = true }
 chrono = { workspace = true }
+bcrypt = { workspace = true }
 
 cryptopay-core = { path = "../core" }
 cryptopay-db = { path = "../db" }
