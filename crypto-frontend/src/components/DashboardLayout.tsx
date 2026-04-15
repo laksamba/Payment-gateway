@@ -1,4 +1,5 @@
-import { TrendingUp, CreditCard, Settings, LogOut, BookOpen } from "lucide-react";
+import { TrendingUp, CreditCard, Settings, LogOut, BookOpen, Home } from "lucide-react";
+import { Link } from "react-router-dom";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -23,27 +24,38 @@ export function DashboardLayout({
 }: DashboardLayoutProps) {
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-green-100 rounded-lg flex items-center justify-center">
-                <TrendingUp className="w-5 h-5 text-green-600" />
-              </div>
-              <div>
-                <h1 className="font-semibold text-gray-900">CryptoPay</h1>
-                {merchantName && (
-                  <p className="text-xs text-gray-500">{merchantName}</p>
-                )}
-              </div>
+              <Link to="/" className="flex items-center gap-2">
+                <div className="w-9 h-9 bg-green-600 rounded-lg flex items-center justify-center">
+                  <TrendingUp className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h1 className="font-semibold text-gray-900">CryptoPay</h1>
+                  {merchantName && (
+                    <p className="text-xs text-gray-500">{merchantName}</p>
+                  )}
+                </div>
+              </Link>
             </div>
-            <button
-              onClick={onLogout}
-              className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-              Logout
-            </button>
+            <div className="flex items-center gap-3">
+              <Link
+                to="/"
+                className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <Home className="w-4 h-4" />
+                Home
+              </Link>
+              <button
+                onClick={onLogout}
+                className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+                Logout
+              </button>
+            </div>
           </div>
         </div>
       </header>
