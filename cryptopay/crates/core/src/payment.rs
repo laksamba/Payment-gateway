@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use std::str::FromStr;
 use std::fmt;
 use uuid::Uuid;
@@ -22,6 +21,10 @@ pub struct Payment {
     pub expires_at: DateTime<Utc>,
     pub confirmed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    pub sweep_status: String,
+    pub sweep_tx_hash: Option<String>,
+    pub swept_at: Option<DateTime<Utc>>,
+    pub sweep_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

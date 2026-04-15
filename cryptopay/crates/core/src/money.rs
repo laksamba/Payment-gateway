@@ -1,5 +1,4 @@
 use rust_decimal::Decimal;
-use rust_decimal::prelude::FromPrimitive;
 
 use crate::errors::AppError;
 
