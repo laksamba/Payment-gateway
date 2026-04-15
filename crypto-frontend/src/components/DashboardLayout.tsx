@@ -1,4 +1,4 @@
-import { TrendingUp, CreditCard, Settings, LogOut } from "lucide-react";
+import { TrendingUp, CreditCard, Settings, LogOut, BookOpen } from "lucide-react";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -10,6 +10,7 @@ interface DashboardLayoutProps {
 
 const navItems = [
   { id: "payments", label: "Payments", icon: CreditCard },
+  { id: "integration", label: "Integration", icon: BookOpen },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
@@ -48,7 +49,7 @@ export function DashboardLayout({
       </header>
 
       <div className="flex">
-        <aside className="w-56 bg-white border-r border-gray-200 min-h-[calc(100vh-4rem)]">
+        <aside className="w-56 bg-white border-r border-gray-200 sticky top-16 h-[calc(100vh-4rem)] shrink-0">
           <nav className="p-4 space-y-1">
             {navItems.map(({ id, label, icon: Icon }) => (
               <button
@@ -67,7 +68,7 @@ export function DashboardLayout({
           </nav>
         </aside>
 
-        <main className="flex-1 p-6">{children}</main>
+        <main className="flex-1 p-6 overflow-y-auto">{children}</main>
       </div>
     </div>
   );

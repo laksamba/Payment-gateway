@@ -3,6 +3,7 @@ import { useAuth } from "../hooks/useAuth";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { PaymentsPage } from "./PaymentsPage";
 import { SettingsPage } from "./SettingsPage";
+import { IntegrationPage } from "./IntegrationPage";
 import { Navigate } from "react-router-dom";
 
 export function DashboardPage() {
@@ -18,7 +19,13 @@ export function DashboardPage() {
       onLogout={logout}
       merchantName={profile?.name}
     >
-      {activeTab === "payments" ? <PaymentsPage /> : <SettingsPage />}
+      {activeTab === "payments" ? (
+        <PaymentsPage />
+      ) : activeTab === "integration" ? (
+        <IntegrationPage />
+      ) : (
+        <SettingsPage />
+      )}
     </DashboardLayout>
   );
 }
